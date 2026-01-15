@@ -1,0 +1,81 @@
+Metadata-Version: 2.3
+Name: multiversx-sdk-core
+Version: 0.8.1
+Summary: Core components of the MultiversX Python SDK.
+Project-URL: Homepage, https://github.com/multiversx/mx-sdk-py-core
+Author: MultiversX
+License-Expression: MIT
+License-File: LICENSE
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python :: 3
+Requires-Python: >=3.8
+Requires-Dist: protobuf==3.20.2
+Requires-Dist: pycryptodomex==3.19.1
+Description-Content-Type: text/markdown
+
+# mx-sdk-py-core
+
+Core components of the MultiversX Python SDK.
+
+## Distribution
+ 
+ - GitHub: `git+https://git@github.com/multiversx/mx-sdk-py-core.git@v{Version}#egg=multiversx_sdk_core`
+ - [PyPi](https://pypi.org/user/multiversx/)
+
+## Documentation
+
+[docs.multiversx.com](https://docs.multiversx.com/sdk-and-tools/erdpy/erdpy/)
+
+## Development setup
+
+### Virtual environment
+
+Create a virtual environment and install the dependencies:
+
+```
+python3 -m venv ./venv
+source ./venv/bin/activate
+pip install -r ./requirements.txt --upgrade
+```
+
+Install development dependencies, as well:
+
+```
+pip install -r ./requirements-dev.txt --upgrade
+```
+
+Above, `requirements.txt` should mirror the **dependencies** section of `pyproject.toml`.
+
+If using VSCode, restart it or follow these steps:
+ - `Ctrl + Shift + P`
+ - _Select Interpreter_
+ - Choose `./venv/bin/python`.
+
+### Tests
+
+Run the tests as follows:
+
+```
+pytest .
+```
+
+### Linting
+
+First, install [`pyright`](https://github.com/microsoft/pyright) as follows:
+
+```
+npm install --global pyright
+```
+
+Run `pyright`:
+
+```
+pyright
+```
+
+Run `flake8`:
+
+```
+flake8 multiversx_sdk_core
+```

@@ -1,0 +1,7 @@
+node_modules
+dist
+coverage
+test_server
+x402_repo
+.DS_Store
+.env

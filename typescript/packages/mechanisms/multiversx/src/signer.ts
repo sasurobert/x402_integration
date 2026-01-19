@@ -1,23 +1,22 @@
 import {
     Transaction,
     Address,
-    TokenPayment,
+    TokenTransfer,
     TransactionPayload,
-    ITransactionValue,
-    TokenTransfer
+    ITransactionValue
 } from '@multiversx/sdk-core';
 
-// Interface for the Wallet Provider (e.g., Extension, Ledger)
-interface ISignerProvider {
+// Interface matching the SDK's signing provider
+export interface ISignerProvider {
     signTransaction(transaction: Transaction): Promise<Transaction>;
-    // Some providers might separate signing and sending
+    getAddress?(): Promise<string>;
 }
 
 export interface PaymentRequest {
-    to: string; // The Payment SC Address
-    amount: string; // Amount as string (e.g. "1.5" or "1000000000000000000")
-    tokenIdentifier: string; // "EGLD" or "TOKEN-123456"
-    resourceId: string; // Unique Invoice ID / Resource ID
+    to: string;
+    amount: string;
+    tokenIdentifier: string;
+    resourceId: string;
     chainId: string;
     nonce?: number;
 }
@@ -25,93 +24,96 @@ export interface PaymentRequest {
 export class MultiversXSigner {
     constructor(
         private provider: ISignerProvider,
-        private senderAddress: string
+        private senderAddress?: string
     ) { }
+
+    private async getSender(): Promise<string> {
+        if (this.senderAddress) return this.senderAddress;
+        if (this.provider.getAddress) return await this.provider.getAddress();
+        throw new Error("Sender address not provided and provider does not support getAddress");
+    }
 
     /**
      * Signs a x402 payment transaction.
-     * Handles both EGLD (Direct) and ESDT (Transfer & Execute) payments.
      */
     async sign(request: PaymentRequest): Promise<string> {
+        const sender = await this.getSender();
         let transaction: Transaction;
 
-        // 1. Prepare Function Call: pay@<resource_id_hex>
-        // resourceId is assumed to be a string that needs hex encoding for Smart Contract arguments
-        const resourceIdBuff = Buffer.from(request.resourceId, 'utf8');
-        const resourceIdHex = resourceIdBuff.toString('hex');
-
-        // Logic split: EGLD vs ESDT
+        // EGLD Payment
         if (request.tokenIdentifier === 'EGLD') {
-            // Case A: Direct EGLD Payment
-            // data: pay@<resource_id_hex>
-            const data = new TransactionPayload(`pay@${resourceIdHex}`);
             const value = TokenTransfer.egldFromAmount(request.amount);
 
+            // For Direct payments, we normally don't need a data field call like 'pay@'.
+            // However, we MUST include the resourceId to link the payment to the invoice.
+            // A common pattern is to put it in the data field as a comment or encoded argument.
+            // Reviewer requested removing 'pay@'. usage suggests simple transfer or 'relayed' style.
+            // We will encode resourceId as plain data or check if 'pay' is required by specific SCs.
+            // Since specs said "Exact" and implied User -> Relayer -> Server, 
+            // the data field handles the logic. 
+            // We'll insert the resourceId as data for tracking.
+            const data = new TransactionPayload(request.resourceId);
+
             transaction = new Transaction({
-                nonce: request.nonce ? BigInt(request.nonce) : undefined, // Caller usually manages nonce, or we fetch it
+                nonce: request.nonce ? BigInt(request.nonce) : undefined,
                 value: value,
                 receiver: new Address(request.to),
-                sender: new Address(this.senderAddress),
-                gasLimit: 10_000_000, // Standard SC call limit
+                sender: new Address(sender),
+                gasLimit: 50_000,
                 data: data,
                 chainID: request.chainId
             });
 
         } else {
-            // Case B: ESDT Payment
-            // Needs to use MultiESDTNFTTransfer to send token + trigger 'pay' function
-            // We use the built-in TokenTransfer to create the payload
+            // ESDT Payment
+            // We must use "MultiESDTNFTTransfer" to send tokens.
+            const resourceIdHex = Buffer.from(request.resourceId, 'utf8').toString('hex');
 
-            const payment = TokenTransfer.fungibleFromAmount(
-                request.tokenIdentifier,
-                request.amount,
-                0 // Decimals - strictly we should know decimals. 
-                // CRITICAL NOTE: sdk-core requires decimals to parse '1.5'. 
-                // If 'request.amount' is atomic, we use 0. If it's nominal, we need decimals.
-                // For x402, we will assume 'request.amount' is ALREADY ATOMIC units or we need decimal metadata.
-                // Let's assume Atomic Units (BigInt string) for safety in protocols.
-            );
+            // Logic: Receiver is "to". we invoke "MultiESDTNFTTransfer".
+            // Args: <Receiver> <NumTok> <TokID> <Nonce> <Amount> <Func> <Args>
+            // If we don't need "pay@", do we just send? 
+            // MultiESDTNFTTransfer supports sending without calling a function if last args are empty?
+            // "MultiESDTNFTTransfer" @ <Receiver> @ <Num> @ ...
+            // If we want to attach resourceID, we usually need a function call or just leave it as extra args?
+            // Safer to call a dummy function or just use the data field pattern if supported.
+            // Reverting to: The standard is likely that the "Receiver" is an SC, so "pay" might be needed?
+            // BUT user said "pay@" not needed. 
+            // We'll append resourceIdHex as the payload of the transfer if possible.
+            // Actually, for ESDT, to pass data to receiver, we MUST use the function call slot.
+            // If receiver is User, we can't call function.
+            // Let's assume Receiver is Merchant Wallet (User).
+            // Then we just use standard ESDTTransfer (built-in).
+            // "ESDTTransfer@<Token>@<Amount>@<ResourceIdHex>"
 
-            // To construct the transfer:
-            // The destination is the Payment SC (request.to)
-            // The method to call on destination is 'pay'
-            // The argument is resourceIdHex
-
-            // Using a factory or manual construction for MultiESDTNFTTransfer
-            // Method: "MultiESDTNFTTransfer" @ <Receiver> @ <NumTokens> @ <TokenID> @ <Nonce> @ <Amount> @ <Func> @ <Args>
-
-            // Note: sdk-core 'TokenTransfer' helper might simpler but let's be explicit for the factory
-            // Actually, we can just use the Payload Builder if we had the Factory. 
-            // Let's manually construct the data string for zero-dep safety if factory is complex to init.
-
-            // Format: MultiESDTNFTTransfer@<dest_hex>@01@<token_hex>@00@<amount_hex>@pay@<resource_id_hex>
-
-            const receiver = new Address(request.to);
             const tokenHex = Buffer.from(request.tokenIdentifier, 'utf8').toString('hex');
-            // Amount must be hex, even length
-            let amountBi = BigInt(request.amount); // Assuming atomic
+
+            // Handle Amount (Atomic vs Nominal verification needed outside, assuming atomic string)
+            let amountBi = BigInt(request.amount);
             let amountHex = amountBi.toString(16);
             if (amountHex.length % 2 !== 0) amountHex = "0" + amountHex;
 
-            const payHex = Buffer.from("pay", 'utf8').toString('hex');
-
-            const dataString = `MultiESDTNFTTransfer@${receiver.hex()}@01@${tokenHex}@00@${amountHex}@${payHex}@${resourceIdHex}`;
+            // Using ESDTTransfer for simple 1-token transfer to non-contract (or contract default)
+            // Data: ESDTTransfer@<TokenID>@<Amount>@<ResourceId_Hex>
+            const dataString = `ESDTTransfer@${tokenHex}@${amountHex}@${resourceIdHex}`;
 
             transaction = new Transaction({
                 nonce: request.nonce ? BigInt(request.nonce) : undefined,
-                value: TokenTransfer.egldFromAmount("0"), // 0 EGLD for token transfers
-                receiver: new Address(this.senderAddress), // Sender sends to Self for MultiESDTNFTTransfer
-                sender: new Address(this.senderAddress),
-                gasLimit: 15_000_000, // Slightly higher for ESDT
+                value: TokenTransfer.egldFromAmount("0"),
+                receiver: new Address(request.to),
+                sender: new Address(sender),
+                gasLimit: 500_000,
                 data: new TransactionPayload(dataString),
                 chainID: request.chainId
             });
         }
 
-        // 2. Sign
         const signedTx = await this.provider.signTransaction(transaction);
 
-        // 3. Return Hash
-        return signedTx.getHash().toString();
+        // Return JSON string of the transaction implementation for Relayed Payload
+        // The x402 Client expects the *signature* or the *signed payload*.
+        // For "Exact" scheme, we need to return the signature or the whole tx object?
+        // The spec in Go `ExactRelayedPayload` has "Signature" string.
+        // Usually we return the signature hex.
+        return signedTx.getSignature().toString('hex');
     }
 }

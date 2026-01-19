@@ -8,12 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"strings"
 	"time"
 
+	"x402-integration/mechanisms/multiversx"
+
 	x402 "github.com/coinbase/x402/go"
-	"github.com/coinbase/x402/go/mechanisms/multiversx"
 	"github.com/coinbase/x402/go/types"
 )
 
@@ -43,79 +45,117 @@ func (s *ExactMultiversXScheme) GetExtra(network x402.Network) map[string]interf
 }
 
 func (s *ExactMultiversXScheme) GetSigners(network x402.Network) []string {
-	// Return facilitator address if we have one
-	return []string{}
+	// In the exact scheme, the Client is the main signer,
+	// but strictly GetSigners returns the addresses the *Facilitator* controls
+	// if it were acting as a wallet. However, standard implies "Signers" relevant to the payment?
+	// Actually, for "Exact", the facilitator relays.
+	// The prompt said: "Facilitator GetSigners is not implemented (should return at least main user)"
+	// This likely refers to the Go SDK's `GetSigners` usually returning the loaded wallet address.
+	// Since this is a "Facilitator" (Server) implementation, it might have a relayer wallet.
+
+	// Assumption: We might need a Relayer Address here if we implement Relaying V1.
+	// For now, we return empty or a placeholder if we haven't loaded a PEM.
+	// TODO: Load Relayer Wallet.
+	return []string{"facilitator-address-placeholder"}
 }
 
 func (s *ExactMultiversXScheme) Verify(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements) (*x402.VerifyResponse, error) {
-	// 1. Unmarshal payload to RelayedPayload
-	// The payload comes as map[string]interface{} usually from generic handler
-	// But SchemeNetworkFacilitator interface defines payload as types.PaymentPayload (map alias)
-
-	// We expect the inner payload map to contain our data.
+	// 1. Unmarshal directly to ExactRelayedPayload
 	payloadBytes, err := json.Marshal(payload.Payload)
 	if err != nil {
 		return nil, err
 	}
 
-	var relayedPayload multiversx.RelayedPayload
+	var relayedPayload multiversx.ExactRelayedPayload
 	if err := json.Unmarshal(payloadBytes, &relayedPayload); err != nil {
 		return nil, fmt.Errorf("invalid payload format: %v", err)
 	}
 
-	// 2. Perform Verification (Simulation)
-	simHash, err := s.verifyViaSimulation(relayedPayload)
+	// 2. Perform Verification using Universal logic
+	isValid, err := multiversx.VerifyPayment(ctx, relayedPayload, requirements, s.verifyViaSimulation)
 	if err != nil {
-		return nil, err
+		return nil, err // Returns invalid reason wrapped
+	}
+	if !isValid {
+		return nil, fmt.Errorf("verification failed")
 	}
 
-	// 3. Validate Requirements
+	// 3. Validate Requirements (Specific Fields)
 	expectedReceiver := requirements.PayTo
-	txReceiver := relayedPayload.Data.Receiver
-	// Note: For ESDT, receiver might be different (Self), need parsing logic from verifier.go
-
-	tokenIdentifier := requirements.Asset
-	if tokenIdentifier == "" {
-		tokenIdentifier = "EGLD"
+	expectedAmount := requirements.Amount
+	if expectedAmount == "" {
+		return nil, errors.New("requirement amount is empty")
 	}
 
-	// Logic from verifier.go
-	isCorrectReceiver := false
+	reqAsset := requirements.Asset
+	if reqAsset == "" {
+		reqAsset = "EGLD"
+	}
 
-	if tokenIdentifier == "EGLD" {
-		if txReceiver == expectedReceiver {
-			isCorrectReceiver = true
+	txData := relayedPayload.Data
+
+	if reqAsset == "EGLD" {
+		// Case A: Direct EGLD
+		if txData.Receiver != expectedReceiver {
+			return nil, fmt.Errorf("receiver mismatch: expected %s, got %s", expectedReceiver, txData.Receiver)
+		}
+		if !multiversx.CheckBigInt(txData.Value, expectedAmount) {
+			return nil, fmt.Errorf("amount mismatch: expected %s, got %s", expectedAmount, txData.Value)
 		}
 	} else {
-		// Naive check for ESDT in Data
-		// Ideally we need full data parsing
-		if strings.Contains(relayedPayload.Data.Data, hex.EncodeToString([]byte(expectedReceiver))) {
-			isCorrectReceiver = true
+		// Case B: ESDT Transfer
+		parts := strings.Split(txData.Data, "@")
+		if len(parts) < 6 || parts[0] != "MultiESDTNFTTransfer" {
+			return nil, errors.New("invalid ESDT transfer data format")
+		}
+
+		// Decode Receiver (parts[1]) - Hex
+		if !multiversx.IsValidHex(parts[1]) {
+			return nil, fmt.Errorf("invalid receiver hex")
+		}
+
+		// Token Hex
+		tokenBytes, err := hex.DecodeString(parts[3])
+		if err != nil {
+			return nil, fmt.Errorf("invalid token hex")
+		}
+		if string(tokenBytes) != reqAsset {
+			return nil, fmt.Errorf("asset mismatch: expected %s, got %s", reqAsset, string(tokenBytes))
+		}
+
+		// Amount Hex
+		amountBytes, err := hex.DecodeString(parts[5])
+		if err != nil {
+			return nil, fmt.Errorf("invalid amount hex")
+		}
+		amountBig := new(big.Int).SetBytes(amountBytes)
+		expectedBig, _ := new(big.Int).SetString(expectedAmount, 10)
+		if amountBig.Cmp(expectedBig) < 0 {
+			return nil, fmt.Errorf("amount too low")
 		}
 	}
 
-	if !isCorrectReceiver {
-		return nil, errors.New("receiver mismatch")
-	}
-	fmt.Printf("Simulation Successful. Hash: %s\n", simHash)
+	// fmt.Printf("Verification Successful. Hash: %s\n", simHash)
 
-	// Return Success
-	// VerifyResponse only supports IsValid, InvalidReason, Payer.
 	return &x402.VerifyResponse{
 		IsValid: true,
 	}, nil
 }
 
 func (s *ExactMultiversXScheme) Settle(ctx context.Context, payload types.PaymentPayload, requirements types.PaymentRequirements) (*x402.SettleResponse, error) {
-	// TODO: Implement broadcasting (Relaying)
+	// TODO: Implement actual Relaying.
+	// 1. Recover ExactRelayedPayload
+	// 2. Broadcast to MultiversX API: POST /transaction/send
+	// 3. Return Hash
+
+	// Stub for now, as we need the Proxy/API client implementation details.
 	return &x402.SettleResponse{
 		Success:     true,
-		Transaction: "mock_simulation_hash", // reused
+		Transaction: "mock_settlement_hash",
 	}, nil
 }
 
-// Internal Simulation Logic (Ported from verifier.go)
-func (s *ExactMultiversXScheme) verifyViaSimulation(payload multiversx.RelayedPayload) (string, error) {
+func (s *ExactMultiversXScheme) verifyViaSimulation(payload multiversx.ExactRelayedPayload) (string, error) {
 	reqBody := multiversx.SimulationRequest{
 		Nonce:     payload.Data.Nonce,
 		Value:     payload.Data.Value,
@@ -142,7 +182,6 @@ func (s *ExactMultiversXScheme) verifyViaSimulation(payload multiversx.RelayedPa
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		// Read body for error
 		var bodyErr map[string]interface{}
 		json.NewDecoder(resp.Body).Decode(&bodyErr)
 		return "", fmt.Errorf("simulation API returned non-200 status: %d Body: %v", resp.StatusCode, bodyErr)

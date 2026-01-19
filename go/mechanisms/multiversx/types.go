@@ -3,7 +3,7 @@ package multiversx
 import "math/big"
 
 // SchemeExact is the identifier for the exact payment scheme
-const SchemeExact = "multiversx-exact-v1" // or V2 if we are bold
+const SchemeExact = "multiversx-exact-v1"
 
 // NetworkConfig holds configuration for a MultiversX network
 type NetworkConfig struct {
@@ -11,8 +11,8 @@ type NetworkConfig struct {
 	ChainID string
 }
 
-// RelayedPayload matches the JSON sent by the Client (V3/Relayed)
-type RelayedPayload struct {
+// ExactRelayedPayload matches the JSON sent by the Client (V3/Relayed)
+type ExactRelayedPayload struct {
 	Scheme string `json:"scheme"`
 	Data   struct {
 		Nonce     uint64 `json:"nonce"`

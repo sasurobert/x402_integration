@@ -63,7 +63,10 @@ func (s *ExactMultiversXScheme) CreatePaymentPayload(ctx context.Context, requir
 
 	// ESDT Logic
 	dataString := ""
-	if requirements.Asset != "" && requirements.Asset != "EGLD" {
+	// Normalize Asset
+	asset := requirements.Asset
+
+	if asset != "" && asset != "EGLD" {
 		// ESDT Transfer (MultiESDTNFTTransfer)
 		// Receiver becomes Sender (Self Transfer)
 		receiver = sender
@@ -96,7 +99,20 @@ func (s *ExactMultiversXScheme) CreatePaymentPayload(ctx context.Context, requir
 		}
 
 		// MultiESDTNFTTransfer format
-		dataString = fmt.Sprintf("MultiESDTNFTTransfer@%s@01@%s@00@%s", destHex, tokenHex, amtHex)
+		// MultiESDTNFTTransfer format
+		// MultiESDTNFTTransfer@<DestHex>@01@<TokenHex>@00@<AmountHex>@<ResourceID>
+
+		// Extract ResourceID from Extra if present
+		var resourceIdHex string
+		if rid, ok := requirements.Extra["resourceId"].(string); ok && rid != "" {
+			resourceIdHex = hex.EncodeToString([]byte(rid))
+		}
+
+		if resourceIdHex != "" {
+			dataString = fmt.Sprintf("MultiESDTNFTTransfer@%s@01@%s@00@%s@%s", destHex, tokenHex, amtHex, resourceIdHex)
+		} else {
+			dataString = fmt.Sprintf("MultiESDTNFTTransfer@%s@01@%s@00@%s", destHex, tokenHex, amtHex)
+		}
 
 	} else {
 		// EGLD

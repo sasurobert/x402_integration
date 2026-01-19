@@ -109,9 +109,22 @@ func (s *ExactMultiversXScheme) Verify(ctx context.Context, payload types.Paymen
 			return nil, errors.New("invalid ESDT transfer data format")
 		}
 
-		// Decode Receiver (parts[1]) - Hex
-		if !multiversx.IsValidHex(parts[1]) {
+		// Decode Receiver (parts[1]) - Hex (Destination)
+		destHex := parts[1]
+		if !multiversx.IsValidHex(destHex) {
 			return nil, fmt.Errorf("invalid receiver hex")
+		}
+
+		// STRICT VERIFICATION: Ensure destHex matches expectedReceiver (PayTo)
+		// expectedReceiver is Bech32 (erd1...). We must decode it to get the pubkey hex.
+		_, pubKeyBytes, err := multiversx.DecodeBech32(expectedReceiver)
+		if err != nil {
+			return nil, fmt.Errorf("invalid expected receiver format (not bech32): %v", err)
+		}
+		expectedHex := hex.EncodeToString(pubKeyBytes)
+
+		if destHex != expectedHex {
+			return nil, fmt.Errorf("receiver mismatch: encoded destination %s does not match requirement %s (%s)", destHex, expectedReceiver, expectedHex)
 		}
 
 		// Token Hex

@@ -66,42 +66,31 @@ export class MultiversXSigner {
 
         } else {
             // ESDT Payment
-            // We must use "MultiESDTNFTTransfer" to send tokens.
+            // Use "MultiESDTNFTTransfer" to send tokens (Standard Relayed pattern).
+            // Logic: Receiver is Sender (Self). Data encodes destination.
+
             const resourceIdHex = Buffer.from(request.resourceId, 'utf8').toString('hex');
-
-            // Logic: Receiver is "to". we invoke "MultiESDTNFTTransfer".
-            // Args: <Receiver> <NumTok> <TokID> <Nonce> <Amount> <Func> <Args>
-            // If we don't need "pay@", do we just send? 
-            // MultiESDTNFTTransfer supports sending without calling a function if last args are empty?
-            // "MultiESDTNFTTransfer" @ <Receiver> @ <Num> @ ...
-            // If we want to attach resourceID, we usually need a function call or just leave it as extra args?
-            // Safer to call a dummy function or just use the data field pattern if supported.
-            // Reverting to: The standard is likely that the "Receiver" is an SC, so "pay" might be needed?
-            // BUT user said "pay@" not needed. 
-            // We'll append resourceIdHex as the payload of the transfer if possible.
-            // Actually, for ESDT, to pass data to receiver, we MUST use the function call slot.
-            // If receiver is User, we can't call function.
-            // Let's assume Receiver is Merchant Wallet (User).
-            // Then we just use standard ESDTTransfer (built-in).
-            // "ESDTTransfer@<Token>@<Amount>@<ResourceIdHex>"
-
             const tokenHex = Buffer.from(request.tokenIdentifier, 'utf8').toString('hex');
 
-            // Handle Amount (Atomic vs Nominal verification needed outside, assuming atomic string)
+            // Destination Address to Hex
+            const destAddress = new Address(request.to);
+            const destHex = destAddress.hex();
+
+            // Handle Amount
             let amountBi = BigInt(request.amount);
             let amountHex = amountBi.toString(16);
             if (amountHex.length % 2 !== 0) amountHex = "0" + amountHex;
 
-            // Using ESDTTransfer for simple 1-token transfer to non-contract (or contract default)
-            // Data: ESDTTransfer@<TokenID>@<Amount>@<ResourceId_Hex>
-            const dataString = `ESDTTransfer@${tokenHex}@${amountHex}@${resourceIdHex}`;
+            // Data: MultiESDTNFTTransfer @ <DestHex> @ <NumTransfers(01)> @ <TokenHex> @ <Nonce(00)> @ <AmountHex> @ <Func(ResourceID)>
+            // We pass ResourceID as the "Function" name (or first arg after transfer) so it appears in data and is tracked.
+            const dataString = `MultiESDTNFTTransfer@${destHex}@01@${tokenHex}@00@${amountHex}@${resourceIdHex}`;
 
             transaction = new Transaction({
                 nonce: request.nonce ? BigInt(request.nonce) : undefined,
                 value: TokenTransfer.egldFromAmount("0"),
-                receiver: new Address(request.to),
+                receiver: new Address(sender), // Send to Self
                 sender: new Address(sender),
-                gasLimit: 500_000,
+                gasLimit: 60_000_000, // Higher gas for MultiESDT
                 data: new TransactionPayload(dataString),
                 chainID: request.chainId
             });

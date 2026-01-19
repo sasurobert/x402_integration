@@ -79,5 +79,44 @@ func DecodeBech32(bech string) (string, []byte, error) {
 		return "", nil, fmt.Errorf("invalid checksum")
 	}
 
-	return hrp, nil, nil
+	// Remove checksum
+	dataInts = dataInts[:len(dataInts)-6]
+
+	// Convert 5-bit to 8-bit
+	decoded, err := convertBits(dataInts, 5, 8, false)
+	if err != nil {
+		return "", nil, fmt.Errorf("failed to convert bits: %v", err)
+	}
+
+	return hrp, decoded, nil
+}
+
+func convertBits(data []int, fromBits int, toBits int, pad bool) ([]byte, error) {
+	acc := 0
+	bits := 0
+	out := make([]byte, 0)
+	maxv := (1 << toBits) - 1
+	max_acc := (1 << (fromBits + toBits - 1)) - 1
+
+	for _, v := range data {
+		if v < 0 || (v>>fromBits) != 0 {
+			return nil, fmt.Errorf("invalid value")
+		}
+		acc = ((acc << fromBits) | v) & max_acc
+		bits += fromBits
+		for bits >= toBits {
+			bits -= toBits
+			out = append(out, byte((acc>>bits)&maxv))
+		}
+	}
+
+	if pad {
+		if bits > 0 {
+			out = append(out, byte((acc<<(toBits-bits))&maxv))
+		}
+	} else if bits >= fromBits || ((acc<<(toBits-bits))&maxv) != 0 {
+		return nil, fmt.Errorf("invalid padding")
+	}
+
+	return out, nil
 }

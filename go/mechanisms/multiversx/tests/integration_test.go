@@ -2,7 +2,9 @@ package multiversx_test
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,7 +16,7 @@ import (
 )
 
 func TestFacilitatorVerify_EGLD(t *testing.T) {
-	// 1. Mock MultiversX API (Simulation Endpoint)
+	// Mock MultiversX API (Simulation Endpoint)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/transaction/simulate" {
 			t.Errorf("Expected path /transaction/simulate, got %s", r.URL.Path)
@@ -31,10 +33,10 @@ func TestFacilitatorVerify_EGLD(t *testing.T) {
 	}))
 	defer server.Close()
 
-	// 2. Setup Facilitator
+	// Setup Facilitator
 	scheme := facilitator.NewExactMultiversXScheme(server.URL)
 
-	// 3. Create Payload (Simulate Client)
+	// Create Payload (Simulate Client)
 	// Direct EGLD payment
 	rp := multiversx.ExactRelayedPayload{
 		Scheme: multiversx.SchemeExact,
@@ -53,14 +55,14 @@ func TestFacilitatorVerify_EGLD(t *testing.T) {
 		Payload: rpMap,
 	}
 
-	// 4. Create Requirements
+	// Create Requirements
 	req := types.PaymentRequirements{
 		PayTo:  "erd1receiver",
 		Amount: "100",
 		Asset:  "EGLD",
 	}
 
-	// 5. Verify
+	// Verify
 	resp, err := scheme.Verify(context.Background(), paymentPayload, req)
 	if err != nil {
 		t.Fatalf("Verification failed: %v", err)
@@ -82,12 +84,22 @@ func TestFacilitatorVerify_ESDT_Success(t *testing.T) {
 
 	scheme := facilitator.NewExactMultiversXScheme(server.URL)
 
-	// ESDT Data: "MultiESDTNFTTransfer@<receiver_hex>@01@<token_hex>@00@<amount_hex>@..."
-	// receiver: erd1receiver -> hex (mock: "7265636569766572")
-	// token: USDC-123 -> hex ("555344432d313233")
-	// amount: 100 -> hex ("64")
+	// Use Real Bech32 Address (Bob) for Strict Verification
+	payTo := "erd1spyavw0956vq68xj8y4tenjpq2wd5a9p2c6j8gsz7ztyrnpxrruqzu66jx"
+	_, pubBytes, err := multiversx.DecodeBech32(payTo)
+	if err != nil {
+		t.Fatalf("Failed to decode test address: %v", err)
+	}
+	payToHex := hex.EncodeToString(pubBytes)
 
-	dataString := "MultiESDTNFTTransfer@7265636569766572@01@555344432d313233@00@64"
+	// Token: USDC-123 -> hex ("555344432d313233")
+	tokenHex := hex.EncodeToString([]byte("USDC-123"))
+	// Amount: 100 -> hex ("64")
+	amountHex := "64"
+
+	// Data: "MultiESDTNFTTransfer@<receiver_hex>@01@<token_hex>@00@<amount_hex>"
+	// The facilitator expects this exact format.
+	dataString := fmt.Sprintf("MultiESDTNFTTransfer@%s@01@%s@00@%s", payToHex, tokenHex, amountHex)
 
 	rp := multiversx.ExactRelayedPayload{}
 	rp.Data.Data = dataString
@@ -105,25 +117,7 @@ func TestFacilitatorVerify_ESDT_Success(t *testing.T) {
 	}
 
 	req := types.PaymentRequirements{
-		PayTo: "receiver", // hex matches "7265636569766572"? Need to check logic.
-		// In strict check implementation, we assumed decoding hex matches `req.PayTo`.
-		// If `req.PayTo` is "erd1...", facilitator tries to match.
-		// For this test, let's assume `req.PayTo` string is what we decode from hex.
-		// hex("receiver") = "7265636569766572".
-		// So strict check: hex.DecodeString("7265636569766572") -> "receiver" == req.PayTo.
-		// If real PayTo is "erd1...", facilitator code check expected us to act as if we decoded it?
-		// Re-read facilitator logic:
-		// bytes, _ := hex.DecodeString(parts[1]) -> if string(bytes) == expectedReceiver?
-		// No, usually Reciever is Bytes. expectedReceiver is String.
-		// In my implementation:
-		// receiverBytes, _ := hex.DecodeString(parts[1])
-		// if we didn't implement bech32, we assume comparison is tricky.
-		// For TEST purpose: I'll use "receiver" as the mocked address to satisfy the check if my implementation compares bytes-as-string?
-		// My implementation did:
-		// tokenBytes, _ := hex.DecodeString(parts[3]) -> string(tokenBytes) == reqAsset.
-		// So yes, I treat the hex content as the string value.
-		// So if I put hex("receiver") in data, I should expect "receiver" in requirements.
-
+		PayTo:  payTo, // Bech32
 		Amount: "100",
 		Asset:  "USDC-123",
 	}
@@ -134,5 +128,59 @@ func TestFacilitatorVerify_ESDT_Success(t *testing.T) {
 	}
 	if !resp.IsValid {
 		t.Error("IsValid should be true")
+	}
+}
+
+func TestFacilitatorVerify_EGLD_Alias_MultiESDT(t *testing.T) {
+	// Verify that EGLD-000000 via MultiESDT payload is accepted
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := multiversx.SimulationResponse{}
+		resp.Data.Result.Status = "success"
+		resp.Data.Result.Hash = "mock_egld_alias_hash"
+		json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	scheme := facilitator.NewExactMultiversXScheme(server.URL)
+
+	// PayTo: Bob
+	payTo := "erd1spyavw0956vq68xj8y4tenjpq2wd5a9p2c6j8gsz7ztyrnpxrruqzu66jx"
+	_, pubBytes, _ := multiversx.DecodeBech32(payTo)
+	payToHex := hex.EncodeToString(pubBytes)
+
+	// Token: EGLD-000000
+	// hex("EGLD-000000") = 45474c442d303030303030
+	tokenHex := hex.EncodeToString([]byte("EGLD-000000"))
+	amountHex := "64" // 100
+
+	dataString := fmt.Sprintf("MultiESDTNFTTransfer@%s@01@%s@00@%s", payToHex, tokenHex, amountHex)
+
+	rp := multiversx.ExactRelayedPayload{}
+	rp.Data.Data = dataString
+	rp.Data.Value = "0"
+	rp.Data.Receiver = "erd1sender"
+	rp.Data.Sender = "erd1sender"
+	rp.Data.Signature = "dummy_sig"
+
+	payloadBytes, _ := json.Marshal(rp)
+	var rpMap map[string]interface{}
+	json.Unmarshal(payloadBytes, &rpMap)
+
+	paymentPayload := types.PaymentPayload{
+		Payload: rpMap,
+	}
+
+	req := types.PaymentRequirements{
+		PayTo:  payTo,
+		Amount: "100",
+		Asset:  "EGLD-000000",
+	}
+
+	resp, err := scheme.Verify(context.Background(), paymentPayload, req)
+	if err != nil {
+		t.Fatalf("Verification failed: %v", err)
+	}
+	if !resp.IsValid {
+		t.Error("IsValid should be true for EGLD-000000 via MultiESDT")
 	}
 }

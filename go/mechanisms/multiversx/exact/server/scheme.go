@@ -27,37 +27,32 @@ func (s *ExactMultiversXScheme) ParsePrice(price x402.Price, network x402.Networ
 	// Price is interface{}, usually map[string]interface{} from JSON
 	// We expect "amount" and "asset" keys.
 
-	priceMap, ok := price.(map[string]interface{})
-	if !ok {
-		// Try casting to AssetAmount if it was already struct (unlikely from generic JSON but possible)
-		if pStruct, ok := price.(x402.AssetAmount); ok {
-			// AssetAmount is valid return type but we need to validate/enhance it
-			priceMap = map[string]interface{}{
-				"amount": pStruct.Amount,
-				"asset":  pStruct.Asset,
-			}
-		} else {
-			return x402.AssetAmount{}, fmt.Errorf("invalid price format")
+	// Try casting to AssetAmount struct first as it's the expected type
+	pStruct, ok := price.(x402.AssetAmount)
+	if ok {
+		// Just validate/defaults
+		if pStruct.Asset == "" {
+			pStruct.Asset = "EGLD"
 		}
+		return pStruct, nil
 	}
 
-	amount, _ := priceMap["amount"].(string)
-	asset, _ := priceMap["asset"].(string)
+	// If not a struct, try map (e.g. from JSON interface{})
+	if pMap, okMap := price.(map[string]interface{}); okMap {
+		amount, _ := pMap["amount"].(string)
+		asset, _ := pMap["asset"].(string)
 
-	if asset == "" {
-		asset = "EGLD"
+		if asset == "" {
+			asset = "EGLD"
+		}
+
+		return x402.AssetAmount{
+			Asset:  asset,
+			Amount: amount,
+		}, nil
 	}
 
-	// Simple decimal logic for demo
-	// In real world, fetch from config/chain
-	// We don't set decimals in AssetAmount because x402 AssetAmount struct doesn't HAVE Decimals field!
-	// x402.AssetAmount definition: Asset string, Amount string, Extra map.
-	// So we just return it.
-
-	return x402.AssetAmount{
-		Asset:  asset,
-		Amount: amount,
-	}, nil
+	return x402.AssetAmount{}, fmt.Errorf("invalid price format: expected AssetAmount struct or map")
 }
 
 func (s *ExactMultiversXScheme) EnhancePaymentRequirements(
@@ -66,20 +61,27 @@ func (s *ExactMultiversXScheme) EnhancePaymentRequirements(
 	supportedKind types.SupportedKind,
 	extensions []string,
 ) (types.PaymentRequirements, error) {
-	// Add default fields if missing
-	if requirements.Extra == nil {
-		requirements.Extra = make(map[string]interface{})
+	// Create a copy to avoid side effects on the passed map
+	reqCopy := requirements
+	if reqCopy.Extra != nil {
+		newExtra := make(map[string]interface{}, len(reqCopy.Extra))
+		for k, v := range reqCopy.Extra {
+			newExtra[k] = v
+		}
+		reqCopy.Extra = newExtra
+	} else {
+		reqCopy.Extra = make(map[string]interface{})
 	}
 
 	// Default to EGLD if no asset
-	if requirements.Asset == "" {
-		requirements.Asset = "EGLD"
+	if reqCopy.Asset == "" {
+		reqCopy.Asset = "EGLD"
 	}
 
-	// Ensure PayTo is present?
-	if requirements.PayTo == "" {
-		return requirements, fmt.Errorf("PayTo is required for MultiversX payments")
+	// Ensure PayTo is present
+	if reqCopy.PayTo == "" {
+		return reqCopy, fmt.Errorf("PayTo is required for MultiversX payments")
 	}
 
-	return requirements, nil
+	return reqCopy, nil
 }

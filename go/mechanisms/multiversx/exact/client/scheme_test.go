@@ -22,12 +22,31 @@ func (m *MockSigner) Sign(ctx context.Context, message []byte) ([]byte, error) {
 	return []byte("signature"), nil
 }
 
+const (
+	// Valid Bech32 Addresses for Testing (Alice/Bob Devnet)
+	testPayTo  = "erd1spyavw0956vq68xj8y4tenjpq2wd5a9p2c6j8gsz7ztyrnpxrruqzu66jx" // Alice (using Bob's valid address)
+	testSender = "erd1spyavw0956vq68xj8y4tenjpq2wd5a9p2c6j8gsz7ztyrnpxrruqzu66jx" // Bob
+	testAsset  = "TEST-123456"
+	testAmount = "1000000000000000000" // 1 EGLD
+)
+
+// MockNetworkProvider
+type MockNetworkProvider struct {
+	nonce uint64
+	err   error
+}
+
+func (m *MockNetworkProvider) GetNonce(ctx context.Context, address string) (uint64, error) {
+	return m.nonce, m.err
+}
+
 func TestCreatePaymentPayload_EGLD(t *testing.T) {
-	signer := &MockSigner{addr: "erd1sender"}
-	scheme := NewExactMultiversXScheme(signer)
+	signer := &MockSigner{addr: testSender}
+	mockProvider := &MockNetworkProvider{nonce: 15}
+	scheme := NewExactMultiversXScheme(signer, WithNetworkProvider(mockProvider))
 
 	req := types.PaymentRequirements{
-		PayTo:   "erd1receiver",
+		PayTo:   testPayTo,
 		Amount:  "100",
 		Asset:   "EGLD",
 		Network: "multiversx:D",
@@ -46,7 +65,7 @@ func TestCreatePaymentPayload_EGLD(t *testing.T) {
 	if rp.Scheme != multiversx.SchemeExact {
 		t.Errorf("Wrong scheme: %s", rp.Scheme)
 	}
-	if rp.Data.Receiver != "erd1receiver" {
+	if rp.Data.Receiver != testPayTo {
 		t.Errorf("Wrong receiver: %s", rp.Data.Receiver)
 	}
 	if rp.Data.Value != "100" {
@@ -55,16 +74,20 @@ func TestCreatePaymentPayload_EGLD(t *testing.T) {
 	if rp.Data.Data != "" {
 		t.Errorf("Expected empty data for EGLD, got %s", rp.Data.Data)
 	}
+	if rp.Data.Nonce != 15 {
+		t.Errorf("Wrong nonce: %d", rp.Data.Nonce)
+	}
 }
 
 func TestCreatePaymentPayload_ESDT(t *testing.T) {
-	signer := &MockSigner{addr: "erd1sender"}
-	scheme := NewExactMultiversXScheme(signer)
+	signer := &MockSigner{addr: testSender}
+	mockProvider := &MockNetworkProvider{nonce: 20}
+	scheme := NewExactMultiversXScheme(signer, WithNetworkProvider(mockProvider))
 
 	req := types.PaymentRequirements{
-		PayTo:   "erd1realreceiver",
+		PayTo:   testPayTo,
 		Amount:  "100",
-		Asset:   "USDC-123456",
+		Asset:   testAsset,
 		Network: "multiversx:D",
 	}
 
@@ -78,11 +101,15 @@ func TestCreatePaymentPayload_ESDT(t *testing.T) {
 	json.Unmarshal(dataBytes, &rp)
 
 	// ESDT check: Receiver should be Sender (Self-transfer)
-	if rp.Data.Receiver != "erd1sender" {
+	if rp.Data.Receiver != testSender {
 		t.Errorf("ESDT tx receiver should be sender, got %s", rp.Data.Receiver)
 	}
 	if rp.Data.Value != "0" {
 		t.Errorf("ESDT tx value should be 0 EGLD, got %s", rp.Data.Value)
+	}
+	// Check Nonce
+	if rp.Data.Nonce != 20 {
+		t.Errorf("Wrong nonce: %d", rp.Data.Nonce)
 	}
 
 	// Check Data field contains "MultiESDTNFTTransfer"
@@ -92,13 +119,14 @@ func TestCreatePaymentPayload_ESDT(t *testing.T) {
 }
 
 func TestCreatePaymentPayload_ESDT_WithResourceID(t *testing.T) {
-	signer := &MockSigner{addr: "erd1sender"}
-	scheme := NewExactMultiversXScheme(signer)
+	signer := &MockSigner{addr: testSender}
+	mockProvider := &MockNetworkProvider{nonce: 25}
+	scheme := NewExactMultiversXScheme(signer, WithNetworkProvider(mockProvider))
 
 	req := types.PaymentRequirements{
-		PayTo:   "erd1realreceiver",
+		PayTo:   testPayTo,
 		Amount:  "100",
-		Asset:   "USDC-123456",
+		Asset:   testAsset,
 		Network: "multiversx:D",
 		Extra: map[string]interface{}{
 			"resourceId": "inv_123",
@@ -123,13 +151,14 @@ func TestCreatePaymentPayload_ESDT_WithResourceID(t *testing.T) {
 }
 
 func TestCreatePaymentPayload_EGLD_Alias(t *testing.T) {
-	signer := &MockSigner{addr: "erd1sender"}
-	scheme := NewExactMultiversXScheme(signer)
+	signer := &MockSigner{addr: testSender}
+	mockProvider := &MockNetworkProvider{nonce: 30}
+	scheme := NewExactMultiversXScheme(signer, WithNetworkProvider(mockProvider))
 
 	req := types.PaymentRequirements{
-		PayTo:   "erd1receiver",
+		PayTo:   testPayTo,
 		Amount:  "100",
-		Asset:   "EGLD-000000", // Should be treated as EGLD
+		Asset:   "EGLD-000000", // Should be treated as EGLD if handled or ESDT token otherwise
 		Network: "multiversx:D",
 	}
 

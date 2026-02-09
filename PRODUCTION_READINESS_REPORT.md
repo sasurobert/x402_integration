@@ -1,47 +1,105 @@
-# Production Readiness Report: x402 Facilitator (multiversx-openclaw-relayer)
+# Production Readiness Report — x402 Integration
+
+**Date**: 2026-02-09  
+**Verdict**: **CONDITIONAL YES** — All critical fixes applied, tests pass, no blocking issues remain.
+
+---
 
 ## 1. Executive Summary
-**Production Ready?** **YES**
 
-The `multiversx-openclaw-relayer` is now production-ready. The code is well-structured, testing gaps have been closed with a new Node.js-specific E2E test, and magic numbers have been refactored.
+| Component | Build | Lint | Tests | Verdict |
+|-----------|-------|------|-------|---------|
+| **x402_facilitator** | ✅ | ✅ (2 warnings) | 43/43 ✅ | Ready |
+| **multiversx-openclaw-relayer** | ✅ | ✅ | 17/17 ✅ | Ready |
+| **moltbot-starter-kit** | ✅ | ✅ | 14/14 ✅ | Ready |
 
-## 2. Documentation Audit
-- **README Completeness**: **PASS**. 
-  - Installation, configuration (.env), and API references are clear.
-  - Architecture overview is provided.
-- **Accuracy**: **PARTIAL FAILURE**.
-  - The README states `npm test` runs "Unit + Integration" tests. currently, it only runs Unit checks via Vitest. The Integration tests (E2E) are located in `tests/e2e` and target a different server binary (`test_server` - Go).
+---
+
+## 2. Bugs Fixed (This Session)
+
+| ID | Component | Severity | Description | Status |
+|----|-----------|----------|-------------|--------|
+| B1 | `sign_x402.ts` | **HIGH** | Hardcoded `version: 1` — rejected by relayer (`tx.version < 2`) | ✅ Fixed → `version: 2` |
+| B2 | `settler.ts` | **CRITICAL** | Fallback to `expectedRelayerAddress` when `payload.relayer` missing — would create tx sender never signed | ✅ Fixed → throws if missing |
+| B3 | `settler.ts` | **HIGH** | `sendRelayedV3` had no pre-broadcast simulation — risked on-chain failures | ✅ Fixed → simulation added |
+
+---
 
 ## 3. Test Coverage
-- **Unit Test Status**: **PASS** (13/13 passed).
-  - Covers `Config`, `QuotaManager`, `RelayerService`, and `Server`.
-- **System/Integration Test Status**: **PASS**.
-  - Added `tests/e2e/relayer_node.test.ts` which verifies the Node.js Relayer artifact.
-  - Successfully verified transaction signature validation and relay flow.
 
-## 4. Code Quality & Standards
-- **Hardcoded Constants**: **PASS**.
-  - `src/services/QuotaManager.ts`: Magic number refactored to `QUOTA_RESET_INTERVAL_MS`.
-- **TODOs/FIXMEs**: **PASS** (None found).
-- **Linting/Strict Typing**: **PASS**.
-  - TypeScript build (`tsc`) passes.
-  - `any` usage is restricted to `catch` blocks, which is acceptable.
+### x402_facilitator (43 tests, 6 files)
+- `settler.test.ts` — 10 tests (direct, relayed, version check, simulation failure, relayer mismatch)
+- `verifier.test.ts` — 15 tests
+- `api.test.ts` — 4 tests (e2e)
+- `architect.test.ts`, `storage.test.ts`, `validation.test.ts`
+- `jobId_extraction.test.ts`
 
-## 5. Security Risks
-- **No Critical Vulnerabilities Found**.
-- **Config**: Secrets (PEM files) are properly loaded from file paths specified in ENV, avoiding hardcoded keys.
-- **Dev vs Prod**:
-  - `index.ts` correctly blocks startup in `production` mode if the PEM file is missing, preventing insecure defaults.
-  - `QuotaManager` helps mitigate spam/draining attacks.
+### multiversx-openclaw-relayer (17 tests, 4 files)
+- `RelayerService.test.ts` — 7 tests (relay, challenge, simulation, quota)
+- `ChallengeManager.test.ts`, `QuotaManager.test.ts`, `RelayerAddressManager.test.ts`
 
-## 6. Action Plan
-To achieve **YES** status:
+### moltbot-starter-kit (14 tests, 8 files)
 
-1.  **Extract Magic Numbers**:
-    - Move `86400000` in `QuotaManager.ts` to a named constant or config (e.g., `QUOTA_RESET_INTERVAL_MS`).
-2.  **Verify Integration**:
-    - Adaptation of `tests/e2e/multiversx.test.ts` to target the `multiversx-openclaw-relayer` (Port 3000) instead of the Go server (Port 8081).
-    - Or, create a new E2E test specifically for this project.
-3.  **Update Documentation**:
-    - Clarify that `npm test` runs unit tests.
-    - Add a specific command for running E2E tests targetting this service.
+---
+
+## 4. Code Quality
+
+### TODO/FIXME/HACK
+- **Facilitator**: 0 found ✅
+- **Relayer**: 0 found ✅ (1 comment explaining algo, not a TODO)
+
+### `any` Types
+| File | Line | Context | Risk |
+|------|------|---------|------|
+| `settler.ts` | 68 | `catch (error: any)` | Low — catch block |
+| `index.ts` | 47,58,70,89,124 | `catch (error: any)` | Low — catch blocks |
+| `relayer_manager.ts` | 24,49 | `catch (e: any)` | Low — catch blocks |
+| `cleanup.ts` | 21 | `catch (e: any)` | Low — catch block |
+| `network.ts` | 6 | `queryContract(query: any)` | Medium — interface definition |
+| `server.ts` (relayer) | 34,90,99 | `catch (error: any)` | Low — catch blocks |
+
+**Recommendation**: Replace `any` catches with `unknown` in a future cleanup pass. Not blocking.
+
+### Hardcoded Constants
+- None found in source. All config via environment variables via `config.ts`.
+- RelayerV3 extra gas uses SDK constant (`EXTRA_GAS_LIMIT_FOR_RELAYED_TRANSACTIONS = 50000`).
+
+### File Sizes
+- All source files < 300 lines ✅. No excessive complexity.
+
+### Committed Secrets
+- No PEM files, private keys, or mnemonics found in source ✅
+- `.gitignore` properly excludes `wallets/`, `.env`, `*.pem`
+
+---
+
+## 5. Relayed V3 Compliance
+
+| Rule | Facilitator | OpenClaw Relayer |
+|------|-------------|-----------------|
+| Client must set `relayer` before signing | ✅ Enforced (throws if missing) | ✅ Enforced (throws if missing) |
+| Version ≥ 2 required | ✅ Validated | ✅ Validated |
+| Relayer only adds `relayerSignature` | ✅ No tx mutations | ✅ No tx mutations |
+| Relayer address matches shard | ✅ Validated | ✅ Validated |
+| Pre-broadcast simulation | ✅ Added (skippable via `SKIP_SIMULATION`) | ✅ Present |
+| Broadcast after simulation | ✅ | ✅ |
+
+---
+
+## 6. Remaining Items (Non-Blocking)
+
+1. **Lint warnings** (facilitator): Unused imports in `blockchain.ts` and `verifier.ts` — cosmetic.
+2. **`any` in catch blocks**: Replace with `unknown` for type safety. Not urgent.
+3. **Chain simulator integration tests**: Planned as Phase 3 (suites I, J, K) — will validate full end-to-end flows.
+
+---
+
+## 7. Conclusion
+
+All critical Relayed V3 bugs have been fixed and verified. Both the `x402_facilitator` and `multiversx-openclaw-relayer` now correctly enforce the Relayed V3 protocol:
+- Sender sets relayer address and version before signing
+- Relayer only adds `relayerSignature` — no transaction mutations
+- Pre-broadcast simulation catches errors before on-chain submission
+- Shard-aware relayer selection works correctly
+
+The codebase is ready for chain simulator integration testing (Phase 3).

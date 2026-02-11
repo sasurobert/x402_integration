@@ -1,7 +1,58 @@
-node_modules
-dist
-coverage
+# Node.js
+node_modules/
+dist/
+coverage/
+
+# Test artifacts
 test_server
-x402_repo
+
+# Submodule / vendored repos
+x402_repo/
+
+# macOS
 .DS_Store
+
+# Environment
 .env
+.env.*
+
+# Python virtual environments
+venv/
+venv_test/
+.venv/
+env/
+
+# Python caches & compiled
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Python packaging
+*.egg-info/
+*.egg
+build/
+eggs/
+sdist/
+wheels/
+
+# pytest
+.pytest_cache/
+
+# Databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Compiled shared objects
+*.so
+*.dylib
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
